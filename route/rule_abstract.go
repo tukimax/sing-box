@@ -21,6 +21,7 @@ type abstractDefaultRule struct {
 	ruleSetItem             RuleItem
 	invert                  bool
 	outbound                string
+	ruleCount               int
 }
 
 func (r *abstractDefaultRule) Type() string {
@@ -162,11 +163,16 @@ func (r *abstractDefaultRule) String() string {
 	}
 }
 
+func (r *abstractDefaultRule) RuleCount() int {
+	return r.ruleCount
+}
+
 type abstractLogicalRule struct {
-	rules    []adapter.HeadlessRule
-	mode     string
-	invert   bool
-	outbound string
+	rules     []adapter.HeadlessRule
+	mode      string
+	invert    bool
+	outbound  string
+	ruleCount int
 }
 
 func (r *abstractLogicalRule) Type() string {
@@ -248,4 +254,8 @@ func (r *abstractLogicalRule) String() string {
 	} else {
 		return "!(" + strings.Join(F.MapToString(r.rules), " "+op+" ") + ")"
 	}
+}
+
+func (r *abstractLogicalRule) RuleCount() int {
+	return r.ruleCount
 }
