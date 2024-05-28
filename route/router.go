@@ -210,18 +210,7 @@ func NewRouter(
 			} else {
 				detour = dialer.NewDetour(router, server.Detour)
 			}
-			switch server.Address {
-			case "local":
-			default:
-				serverURL, _ := url.Parse(server.Address)
-				var serverAddress string
-				if serverURL != nil {
-					serverAddress = serverURL.Hostname()
-				}
-				if serverAddress == "" {
-					serverAddress = server.Address
-				}
-				_, notIpAddress := netip.ParseAddr(serverAddress)
+			if len(server.Address) > 1 || server.Address[0] != "local" {
 				if server.AddressResolver != "" {
 					if !transportTagMap[server.AddressResolver] {
 						return nil, E.New("parse dns server[", tag, "]: address resolver not found: ", server.AddressResolver)
@@ -231,8 +220,25 @@ func NewRouter(
 					} else {
 						continue
 					}
-				} else if notIpAddress != nil && strings.Contains(server.Address, ".") {
-					return nil, E.New("parse dns server[", tag, "]: missing address_resolver")
+				} else {
+					for _, address := range server.Address {
+						switch address {
+						case "local":
+						default:
+							serverURL, _ := url.Parse(address)
+							var serverAddress string
+							if serverURL != nil {
+								serverAddress = serverURL.Hostname()
+							}
+							if serverAddress == "" {
+								serverAddress = address
+							}
+							_, notIpAddress := netip.ParseAddr(serverAddress)
+							if notIpAddress != nil && strings.Contains(address, ".") {
+								return nil, E.New("parse dns server[", tag, "]: missing address_resolver")
+							}
+						}
+					}
 				}
 			}
 			var clientSubnet netip.Prefix
@@ -291,7 +297,7 @@ func NewRouter(
 			transports = append(transports, common.Must1(dns.CreateTransport(dns.TransportOptions{
 				Context: ctx,
 				Name:    "local",
-				Address: "local",
+				Address: []string{"local"},
 				Dialer:  common.Must1(dialer.NewDefault(router, option.DialerOptions{})),
 			})))
 		}
