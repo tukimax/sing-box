@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/sagernet/sing/common"
 	"net"
 	"net/netip"
 	"strings"
@@ -111,6 +112,25 @@ func NewWireGuard(ctx context.Context, router adapter.Router, logger log.Context
 }
 
 func (w *WireGuard) Start() error {
+	if common.Any(w.peers, func(peer wireguard.PeerConfig) bool {
+		return !peer.Endpoint.IsValid()
+	}) {
+		// wait for all outbounds to be started and continue in PortStart
+		return nil
+	}
+	return w.start()
+}
+
+func (w *WireGuard) PortStart() error {
+	if common.All(w.peers, func(peer wireguard.PeerConfig) bool {
+		return peer.Endpoint.IsValid()
+	}) {
+		return nil
+	}
+	return w.start()
+}
+
+func (w *WireGuard) start() error {
 	err := wireguard.ResolvePeers(w.ctx, w.router, w.peers)
 	if err != nil {
 		return err
