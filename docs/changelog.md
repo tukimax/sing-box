@@ -2,6 +2,11 @@
 icon: material/alert-decagram
 ---
 
+### 1.9.2
+
+* Fix WireGuard crash introduced in 1.9.1
+* Fixes and improvements
+
 ### 1.9.1
 
 * Fixes and improvements
