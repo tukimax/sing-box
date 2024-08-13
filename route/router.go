@@ -487,6 +487,10 @@ func (r *Router) Close() error {
 	return err
 }
 
+func (r *Router) OutboundManager() adapter.OutboundManager {
+	return r.outbound
+}
+
 func (r *Router) FakeIPStore() adapter.FakeIPStore {
 	return r.fakeIPStore
 }
@@ -517,4 +521,6 @@ func (r *Router) ResetNetwork() {
 	for _, transport := range r.transports {
 		transport.Reset()
 	}
+
+	runtime.GC()
 }

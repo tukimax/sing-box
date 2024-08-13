@@ -2,6 +2,7 @@ package outbound
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/sagernet/sing/common"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/logger"
+	F "github.com/sagernet/sing/common/format"
 )
 
 var _ adapter.OutboundManager = (*Manager)(nil)
@@ -28,6 +30,8 @@ type Manager struct {
 	stage                   adapter.StartStage
 	outbounds               []adapter.Outbound
 	outboundByTag           map[string]adapter.Outbound
+	outboundProviders       []adapter.OutboundProvider
+	outboundProviderByTag   map[string]adapter.OutboundProvider
 	dependByTag             map[string][]string
 	defaultOutbound         adapter.Outbound
 	defaultOutboundFallback adapter.Outbound
@@ -40,12 +44,18 @@ func NewManager(logger logger.ContextLogger, registry adapter.OutboundRegistry, 
 		endpoint:      endpoint,
 		defaultTag:    defaultTag,
 		outboundByTag: make(map[string]adapter.Outbound),
+		outboundProviderByTag: make(map[string]adapter.OutboundProvider),
 		dependByTag:   make(map[string][]string),
 	}
 }
 
-func (m *Manager) Initialize(defaultOutboundFallback adapter.Outbound) {
+func (m *Manager) Initialize(defaultOutboundFallback adapter.Outbound, outboundProviders []adapter.OutboundProvider) {
 	m.defaultOutboundFallback = defaultOutboundFallback
+
+	for _, provider := range outboundProviders {
+		m.outboundProviderByTag[provider.Tag()] = provider
+	}
+	m.outboundProviders = outboundProviders
 }
 
 func (m *Manager) Start(stage adapter.StartStage) error {
@@ -77,9 +87,56 @@ func (m *Manager) Start(stage adapter.StartStage) error {
 	return nil
 }
 
+func (m *Manager) startProviderOutbounds() error {
+	monitor := taskmonitor.New(m.logger, C.StartTimeout)
+	outboundTag := make(map[string]int)
+	for _, out := range m.outbounds {
+		tag := out.Tag()
+		outboundTag[tag] = 0
+	}
+	for i, p := range m.outboundProviders {
+		var pTag string
+		if p.Tag() == "" {
+			pTag = F.ToString(i)
+		} else {
+			pTag = p.Tag()
+		}
+		for j, out := range p.Outbounds() {
+			var tag string
+			if out.Tag() == "" {
+				out.SetTag(fmt.Sprint("[", pTag, "]", F.ToString(j)))
+			}
+			tag = out.Tag()
+			if _, exists := outboundTag[tag]; exists {
+				count := outboundTag[tag] + 1
+				tag = fmt.Sprint(tag, "[", count, "]")
+				out.SetTag(tag)
+				outboundTag[tag] = count
+			}
+			outboundTag[tag] = 0
+			if starter, isStarter := out.(interface {
+				Start() error
+			}); isStarter {
+				monitor.Start("initialize outbound provider[", pTag, "]", " outbound/", out.Type(), "[", tag, "]")
+				err := starter.Start()
+				monitor.Finish()
+				if err != nil {
+					return E.Cause(err, "initialize outbound provider[", pTag, "]", " outbound/", out.Type(), "[", tag, "]")
+				}
+			}
+		}
+		p.UpdateOutboundByTag()
+	}
+	return nil
+}
+
 func (m *Manager) startOutbounds(outbounds []adapter.Outbound) error {
 	monitor := taskmonitor.New(m.logger, C.StartTimeout)
 	started := make(map[string]bool)
+	err := m.startProviderOutbounds()
+	if err != nil {
+		return nil
+	}
 	for {
 		canContinue := false
 	startOne:
@@ -184,6 +241,39 @@ func (m *Manager) Outbound(tag string) (adapter.Outbound, bool) {
 	return m.endpoint.Get(tag)
 }
 
+func (m *Manager) OutboundWithProvider(tag string) (adapter.Outbound, bool) {
+	outbound, loaded := m.outboundByTag[tag]
+	if loaded {
+		return outbound, loaded
+	}
+	for _, provider := range m.outboundProviders {
+		outbound, loaded = provider.Outbound(tag)
+		if loaded {
+			return outbound, loaded
+		}
+	}
+	return nil, false
+}
+
+func (m *Manager) OutboundsWithProvider() []adapter.Outbound {
+	outbounds := []adapter.Outbound{}
+	outbounds = append(outbounds, m.outbounds...)
+	for _, provider := range m.outboundProviders {
+		myOutbounds := provider.Outbounds()
+		outbounds = append(outbounds, myOutbounds...)
+	}
+	return outbounds
+}
+
+func (m *Manager) OutboundProviders() []adapter.OutboundProvider {
+	return m.outboundProviders
+}
+
+func (m *Manager) OutboundProvider(tag string) (adapter.OutboundProvider, bool) {
+	provider, loaded := m.outboundProviderByTag[tag]
+	return provider, loaded
+}
+
 func (m *Manager) Default() adapter.Outbound {
 	m.access.Lock()
 	defer m.access.Unlock()
@@ -237,6 +327,10 @@ func (m *Manager) Remove(tag string) error {
 		return common.Close(outbound)
 	}
 	return nil
+}
+
+func (m *Manager) CreateOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, inboundType string, options any) (adapter.Outbound, error) {
+	return m.registry.CreateOutbound(ctx, router, logger, tag, inboundType, options)
 }
 
 func (m *Manager) Create(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, inboundType string, options any) error {
