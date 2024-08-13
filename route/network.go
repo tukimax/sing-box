@@ -374,6 +374,13 @@ func (r *NetworkManager) ResetNetwork() {
 		}
 	}
 
+	for _, provider := range r.outbound.OutboundProviders() {
+		listener, isListener := provider.(adapter.InterfaceUpdateListener)
+		if isListener {
+			listener.InterfaceUpdated()
+		}
+	}
+
 	for _, outbound := range r.outbound.Outbounds() {
 		listener, isListener := outbound.(adapter.InterfaceUpdateListener)
 		if isListener {

@@ -133,7 +133,7 @@ func NewTCPTracker(conn net.Conn, manager *Manager, metadata adapter.InboundCont
 		next = outboundManager.Default().Tag()
 	}
 	for {
-		detour, loaded := outboundManager.Outbound(next)
+		detour, loaded := outboundManager.OutboundWithProvider(next)
 		if !loaded {
 			break
 		}
@@ -214,7 +214,7 @@ func NewUDPTracker(conn N.PacketConn, manager *Manager, metadata adapter.Inbound
 		next = outboundManager.Default().Tag()
 	}
 	for {
-		detour, loaded := outboundManager.Outbound(next)
+		detour, loaded := outboundManager.OutboundWithProvider(next)
 		if !loaded {
 			break
 		}

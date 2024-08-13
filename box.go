@@ -12,6 +12,7 @@ import (
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/adapter/outbound"
+	P "github.com/sagernet/sing-box/adapter/provider"
 	"github.com/sagernet/sing-box/common/dialer"
 	"github.com/sagernet/sing-box/common/taskmonitor"
 	C "github.com/sagernet/sing-box/constant"
@@ -42,6 +43,7 @@ type Box struct {
 	outbound   *outbound.Manager
 	connection *route.ConnectionManager
 	router     *route.Router
+	providers  []adapter.OutboundProvider
 	services   []adapter.LifecycleService
 	done       chan struct{}
 }
@@ -185,6 +187,26 @@ func New(options Options) (*Box, error) {
 			return nil, E.Cause(err, "initialize inbound[", i, "]")
 		}
 	}
+	providers := make([]adapter.OutboundProvider, 0, len(options.OutboundProviders))
+	for i, outboundProvderOptions := range options.OutboundProviders {
+		var provider adapter.OutboundProvider
+		var tag string
+		if outboundProvderOptions.Tag != "" {
+			tag = outboundProvderOptions.Tag
+		} else {
+			tag = F.ToString(i)
+		}
+		provider, err = P.New(
+			ctx,
+			router,
+			logFactory.NewLogger(F.ToString("provider", "[", tag, "]")),
+			outboundProvderOptions,
+		)
+		if err != nil {
+			return nil, E.Cause(err, "parse outbound provider[", i, "]")
+		}
+		providers = append(providers, provider)
+	}
 	for i, outboundOptions := range options.Outbounds {
 		var tag string
 		if outboundOptions.Tag != "" {
@@ -215,11 +237,11 @@ func New(options Options) (*Box, error) {
 		direct.NewOutbound(
 			ctx,
 			router,
-			logFactory.NewLogger("outbound/direct"),
-			"direct",
+			logFactory.NewLogger(F.ToString("outbound/direct[OUTBOUNDLESS]")),
+			"OUTBOUNDLESS",
 			option.DirectOutboundOptions{},
 		),
-	))
+	), providers)
 	if platformInterface != nil {
 		err = platformInterface.Initialize(networkManager)
 		if err != nil {
@@ -281,6 +303,7 @@ func New(options Options) (*Box, error) {
 		createdAt:  createdAt,
 		logFactory: logFactory,
 		logger:     logFactory.Logger(),
+		providers:  providers,
 		services:   services,
 		done:       make(chan struct{}),
 	}, nil
@@ -336,6 +359,20 @@ func (s *Box) preStart() error {
 	if err != nil {
 		return err
 	}
+	for i, p := range s.providers {
+		var tag string
+		if p.Tag() == "" {
+			tag = F.ToString(i)
+		} else {
+			tag = p.Tag()
+		}
+		monitor.Start("initialize outbound provider/", p.Type(), "[", tag, "]")
+		err := p.Start()
+		monitor.Finish()
+		if err != nil {
+			return E.Cause(err, "initialize outbound provider/", p.Type(), "[", tag, "]")
+		}
+	}
 	err = adapter.Start(adapter.StartStateInitialize, s.network, s.connection, s.router, s.outbound, s.inbound, s.endpoint)
 	if err != nil {
 		return err
@@ -380,6 +417,12 @@ func (s *Box) start() error {
 	if err != nil {
 		return err
 	}
+	for _, provider := range s.providers {
+		err := provider.PostStart()
+		if err != nil {
+			return E.Cause(err, "post-start outbound provider/", provider.Tag())
+		}
+	}
 	return nil
 }
 
@@ -397,6 +440,22 @@ func (s *Box) Close() error {
 		err = E.Append(err, lifecycleService.Close(), func(err error) error {
 			return E.Cause(err, "close ", lifecycleService.Name())
 		})
+	}
+	monitor := taskmonitor.New(s.logger, C.StopTimeout)
+	var errors error
+	for i, prov := range s.providers {
+		for j, out := range prov.Outbounds() {
+			monitor.Start("closing provider/", prov.Type(), "[", i, "]", " outbound/", out.Type(), "[", j, "]")
+			errors = E.Append(errors, common.Close(out), func(err error) error {
+				return E.Cause(err, "close provider/", prov.Type(), "[", i, "]", " outbound/", out.Type(), "[", j, "]")
+			})
+			monitor.Finish()
+		}
+		monitor.Start("closing provider/", prov.Type(), "[", i, "]")
+		errors = E.Append(errors, common.Close(prov), func(err error) error {
+			return E.Cause(err, "close provider/", prov.Type(), "[", i, "]")
+		})
+		monitor.Finish()
 	}
 	err = E.Append(err, s.logFactory.Close(), func(err error) error {
 		return E.Cause(err, "close logger")
