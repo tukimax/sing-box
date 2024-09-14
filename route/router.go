@@ -1109,8 +1109,6 @@ func (r *Router) RoutePacketConnection(ctx context.Context, conn N.PacketConn, m
 						}
 					}
 				}
-			}
-			if err == nil {
 				conn = bufio.NewCachedPacketConn(conn, buffer, destination)
 			}
 			for _, cachedBuffer := range common.Reverse(bufferList) {
