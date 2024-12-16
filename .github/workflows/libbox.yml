@@ -1,0 +1,78 @@
+name: Build LIBBOX
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev-next
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.1.1
+        with:
+          fetch-depth: 0
+
+      - name: get latest go version
+        id: go
+        run: |
+          echo version=$(curl -s https://raw.githubusercontent.com/actions/go-versions/update-versions-manifest-file/versions-manifest.json | grep -oE '"version": "[0-9]{1}.[0-9]{1,}(.[0-9]{1,})?"' | head -1 | cut -d':' -f2 | sed 's/ //g; s/"//g') >> $GITHUB_OUTPUT
+
+      - name: setup go
+        uses: actions/setup-go@v5.0.0
+        with:
+          go-version: ${{steps.go.outputs.version}}
+
+      - name: checkout app repository
+        uses: actions/checkout@v4.1.1
+        with:
+          path: sfa
+          repository: SagerNet/sing-box-for-android
+          submodules: recursive
+
+      - name: setup java
+        uses: actions/setup-java@v4.0.0
+        with:
+          distribution: 'oracle'
+          java-version: 21
+
+      - name: setup ndk
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26b
+
+      - name: get latest build tools version
+        id: sdk
+        run: echo version=$(ls $ANDROID_HOME/build-tools | tail -n 1) >> $GITHUB_OUTPUT
+
+      - name: get sing-box version
+        id: sing-box
+        run: |
+          git remote add sekai https://github.com/SagerNet/sing-box
+          git fetch --tags --force sekai
+          if [ "${{ github.ref_name }}" == "dev-next" ]; then
+            TAG=$(git describe --tags $(git rev-list --tags --max-count=1))
+          else
+            TAG=$(git describe --tags --abbrev=0)
+          fi
+          REV=$(git rev-parse --short HEAD)
+          echo "version=${TAG}-${REV}" >> $GITHUB_OUTPUT
+
+      - name: build libbox
+        env:
+          CC: ${{steps.setup-ndk.outputs.ndk-path}}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang
+          TAGS: with_quic,with_dhcp,with_wireguard,with_ech,with_utls,with_clash_api,with_gvisor
+          VERSION: ${{steps.sing-box.outputs.version}}
+          CGO_ENABLED: '0'
+        run: |
+          make lib_install
+          gomobile bind -v -a -trimpath -androidapi 21 -javapkg=io.nekohasekai -libname=box -tags ${TAGS} -ldflags "-X github.com/sagernet/sing-box/constant.Version=${VERSION} -s -w -buildid=" ./experimental/libbox
+
+      - name: Upload libbox
+        uses: actions/upload-artifact@v4
+        with:
+          name: libbox
+          path: ./libbox.aar
